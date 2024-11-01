@@ -1,6 +1,6 @@
 use crate::dataset::Dataset;
-use arrow::array::{Array, BooleanArray, UInt64Array};
-use arrow::compute::{self, take}; // Add this import
+use arrow::array::{Array, ArrayRef, BooleanArray, UInt32Array, UInt64Array};
+use arrow::compute::{self, lexsort_to_indices, take, SortColumn, SortOptions}; // Add this import
 use arrow::datatypes::{Field, SchemaRef};
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
@@ -268,9 +268,90 @@ impl LazyDataset {
         columns: &[String],
         ascending: &[bool],
     ) -> ArrowResult<Vec<RecordBatch>> {
-        // Implementation of sorting logic
-        // This is a placeholder - you'll need to implement actual sorting
-        todo!("Implement sorting logic")
+        if batches.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // First, concatenate all batches into one
+        let mut concatenated_columns: Vec<Vec<ArrayRef>> =
+            vec![Vec::new(); batches[0].num_columns()];
+        for batch in batches {
+            for (i, column) in batch.columns().iter().enumerate() {
+                concatenated_columns[i].push(column.clone());
+            }
+        }
+
+        let concatenated_arrays: Vec<ArrayRef> = concatenated_columns
+            .into_iter()
+            .map(|column_chunks| {
+                // Convert Vec<ArrayRef> to Vec<&dyn Array>
+                let arrays: Vec<&dyn Array> = column_chunks
+                    .iter()
+                    .map(|array| array.as_ref() as &dyn Array)
+                    .collect();
+                compute::concat(&arrays)
+            })
+            .collect::<ArrowResult<_>>()?;
+
+        // Create the concatenated batch
+        let concatenated_batch = RecordBatch::try_new(batches[0].schema(), concatenated_arrays)?;
+
+        // Get the sort key columns and convert them to SortColumn
+        let sort_columns: Vec<SortColumn> = columns
+            .iter()
+            .zip(ascending.iter())
+            .map(|(col, &asc)| {
+                let idx = concatenated_batch.schema().index_of(col)?;
+                Ok(SortColumn {
+                    values: concatenated_batch.column(idx).clone(),
+                    options: Some(SortOptions {
+                        descending: !asc,
+                        nulls_first: true,
+                    }),
+                })
+            })
+            .collect::<ArrowResult<_>>()?;
+
+        // Generate sort indices
+        let indices = lexsort_to_indices(&sort_columns, None)?;
+
+        // Apply the sort indices to all columns
+        let sorted_columns: Vec<ArrayRef> = concatenated_batch
+            .columns()
+            .iter()
+            .map(|col| {
+                let taken = take(col, &indices, None)?;
+                Ok(Arc::new(taken) as ArrayRef)
+            })
+            .collect::<ArrowResult<_>>()?;
+
+        // Create the sorted batch
+        let sorted_batch = RecordBatch::try_new(batches[0].schema(), sorted_columns)?;
+
+        // Split back into reasonably sized batches
+        let target_batch_size = 1024 * 1024; // 1 million rows per batch
+        let mut result = Vec::new();
+        let total_rows = sorted_batch.num_rows();
+        let mut start_idx = 0;
+
+        while start_idx < total_rows {
+            let end_idx = (start_idx + target_batch_size).min(total_rows);
+            let indices: UInt32Array = (start_idx..end_idx).map(|i| i as u32).collect();
+
+            let batch_columns: Vec<ArrayRef> = sorted_batch
+                .columns()
+                .iter()
+                .map(|col| {
+                    let taken = take(col, &indices, None)?;
+                    Ok(Arc::new(taken) as ArrayRef)
+                })
+                .collect::<ArrowResult<_>>()?;
+
+            result.push(RecordBatch::try_new(batches[0].schema(), batch_columns)?);
+            start_idx = end_idx;
+        }
+
+        Ok(result)
     }
 
     /// Execute LIMIT operation
