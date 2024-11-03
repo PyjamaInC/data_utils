@@ -31,6 +31,10 @@ impl Dataset {
         &self.batches
     }
 
+    pub fn get_schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+
     /// Create a new Dataset from a vector of RecordBatches
     pub fn new(batches: Vec<RecordBatch>) -> Self {
         let schema = batches
