@@ -12,9 +12,9 @@ pub mod transformations;
 use arrow::error::Result as ArrowResult;
 use dataset::Dataset;
 use date_utils::{DateConversionOptions, DateFormat, ErrorStrategy};
-pub mod lazy;
 use lazy::LazyDataset;
 use transformations::DateConverter;
+pub mod lazy;
 // USE EXAMPLE
 // use your_crate::{Dataset, DateFormat, DateConversionOptions, ErrorStrategy};
 
