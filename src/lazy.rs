@@ -14,6 +14,55 @@ use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Cell, ContentArrangement, Table};
 use std::fmt;
 
+#[derive(Debug)]
+pub struct ColumnFullStats {
+    pub mean: f64,
+    pub variance: f64,
+    pub median: f64,
+    pub max: f64,
+    pub min: f64,
+}
+
+#[derive(Debug)]
+pub struct ColumnFullStatistics(pub HashMap<String, ColumnFullStats>);
+
+// Implement Display for ColumnFullStatistics
+impl fmt::Display for ColumnFullStatistics {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut table = Table::new();
+
+        table
+            .load_preset(UTF8_FULL)
+            .set_content_arrangement(ContentArrangement::Dynamic)
+            .set_width(120);
+
+        table.set_header(vec![
+            Cell::new("Column"),
+            Cell::new("Mean"),
+            Cell::new("Variance"),
+            Cell::new("Median"),
+            Cell::new("Max"),
+            Cell::new("Min"),
+        ]);
+
+        let mut entries: Vec<_> = self.0.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+
+        for (column, stats) in entries {
+            table.add_row(vec![
+                Cell::new(column),
+                Cell::new(format!("{:.6}", stats.mean)),
+                Cell::new(format!("{:.6}", stats.variance)),
+                Cell::new(format!("{:.6}", stats.median)),
+                Cell::new(format!("{:.6}", stats.max)),
+                Cell::new(format!("{:.6}", stats.min)),
+            ]);
+        }
+
+        write!(f, "{}", table)
+    }
+}
+
 // Newtype wrappers for our statistics results
 #[derive(Debug)]
 pub struct ColumnMeans(pub HashMap<String, f64>);
@@ -1126,5 +1175,114 @@ impl LazyDataset {
         }
 
         Ok(ColumnStatistics(results))
+    }
+
+    fn calculate_median_max_min(&self, column: &str) -> ArrowResult<(f64, f64, f64)> {
+        let batches = self.source.get_batches();
+        let mut all_values = Vec::new();
+
+        for batch in batches {
+            let idx = batch.schema().index_of(column)?;
+            let array = batch.column(idx);
+
+            // Cast to f64 if needed
+            let array = match array.data_type() {
+                DataType::Float64 => array.clone(),
+                _ => cast(array, &DataType::Float64)?,
+            };
+
+            if let Some(float_array) = array.as_any().downcast_ref::<Float64Array>() {
+                for i in 0..float_array.len() {
+                    if !float_array.is_null(i) {
+                        all_values.push(float_array.value(i));
+                    }
+                }
+            }
+        }
+
+        if all_values.is_empty() {
+            return Ok((0.0, 0.0, 0.0));
+        }
+
+        // Calculate median
+        all_values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        let mid = all_values.len() / 2;
+        let median = if all_values.len() % 2 == 0 {
+            (all_values[mid - 1] + all_values[mid]) / 2.0
+        } else {
+            all_values[mid]
+        };
+
+        // Calculate max and min
+        let max = *all_values.last().unwrap();
+        let min = *all_values.first().unwrap();
+
+        Ok((median, max, min))
+    }
+
+    /// Calculate comprehensive statistics for all numeric columns
+    pub fn column_full_statistics(&self, ddof: u8) -> ArrowResult<ColumnFullStatistics> {
+        let schema = self.source.get_schema();
+        let mut results = HashMap::new();
+
+        for field in schema.fields() {
+            let column_name = field.name();
+
+            // Check if the column type is numeric
+            match field.data_type() {
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64 => {
+                    // Calculate mean and variance in single pass
+                    match self.mean_variance_single_pass(column_name, ddof) {
+                        Ok((mean, variance)) => {
+                            // Calculate median, max, and min in second pass
+                            match self.calculate_median_max_min(column_name) {
+                                Ok((median, max, min)) => {
+                                    results.insert(
+                                        column_name.clone(),
+                                        ColumnFullStats {
+                                            mean,
+                                            variance,
+                                            median,
+                                            max,
+                                            min,
+                                        },
+                                    );
+                                }
+                                Err(e) => {
+                                    eprintln!(
+                                        "Warning: Could not calculate median/max/min for column {}: {}",
+                                        column_name, e
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Could not calculate mean/variance for column {}: {}",
+                                column_name, e
+                            );
+                        }
+                    }
+                }
+                _ => {
+                    eprintln!(
+                        "Info: Skipping non-numeric column: {} (type: {:?})",
+                        column_name,
+                        field.data_type()
+                    );
+                }
+            }
+        }
+
+        Ok(ColumnFullStatistics(results))
     }
 }

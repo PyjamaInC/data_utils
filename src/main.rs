@@ -57,7 +57,7 @@ fn main() -> ArrowResult<()> {
     println!("Column Means:");
     println!("{}", means);
 
-    let stats = lazy_dataset.column_statistics(1)?;
+    let stats = lazy_dataset.column_full_statistics(1)?;
     println!("\nColumn Statistics (Mean and Variance):");
     println!("{}", stats);
 
