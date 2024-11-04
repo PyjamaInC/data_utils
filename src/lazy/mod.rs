@@ -10,8 +10,7 @@ mod executor;
 mod optimizer;
 
 pub use types::{
-    ColumnFullStatistics, ColumnFullStats, ColumnMeans, ColumnStatistics, FilterPredicate,
-    Operation,
+    ColumnFullStats, ColumnMeans, ColumnStatistics, FilterPredicate, Operation, StatsDescription,
 };
 
 pub mod prelude {

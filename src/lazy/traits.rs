@@ -6,6 +6,7 @@ use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 
 // For basic dataset operations
+// implement for LazyDataset in lazy_api.rs
 pub trait LazyOperations {
     fn new(dataset: Dataset) -> Self;
     fn select(self, columns: Vec<String>) -> Self;
@@ -18,26 +19,31 @@ pub trait LazyOperations {
 }
 
 // For statistical operations
+// implement for LazyDataset in statistics.rs
 pub trait LazyStatistics {
     fn mean_variance_single_pass(&self, column: &str, ddof: u8) -> ArrowResult<(f64, f64)>;
     fn mean(&self, column: &str) -> ArrowResult<f64>;
+    fn counts(&self) -> ArrowResult<HashMap<String, usize>>;
+    fn null_counts(&self) -> ArrowResult<HashMap<String, usize>>;
     fn variance(&self, column: &str, ddof: u8) -> ArrowResult<f64>;
     fn means(&self) -> ArrowResult<ColumnMeans>;
     fn variances(&self, ddof: u8) -> ArrowResult<HashMap<String, f64>>;
     fn column_statistics(&self, ddof: u8) -> ArrowResult<ColumnStatistics>;
-    fn column_full_statistics(&self, ddof: u8) -> ArrowResult<ColumnFullStatistics>;
+    fn describe(&self, ddof: u8) -> ArrowResult<StatsDescription>;
     fn calculate_median_max_min(&self, column: &str) -> ArrowResult<(f64, f64, f64)>;
     fn covariance_pair(&self, col1: &str, col2: &str, ddof: u8) -> ArrowResult<f64>;
     fn covariance_matrix(&self, ddof: u8) -> ArrowResult<CovarianceMatrix>;
 }
 
 // For internal operations (can be private to the crate)
+// implement for LazyDataset in operations.rs
 pub(crate) trait LazyOptimizer {
     fn optimize_query_plan(&self) -> Vec<Operation>;
     fn execute_plan(&self, operations: &[Operation]) -> ArrowResult<Dataset>;
 }
 
 // For execution of individual operations (can be private to the crate)
+// implement for LazyDataset in executor.rs
 pub(crate) trait LazyExecutor {
     fn execute_select(
         &self,

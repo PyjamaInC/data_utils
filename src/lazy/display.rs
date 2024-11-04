@@ -6,7 +6,7 @@ use std::fmt;
 // Move all Display implementations here
 // Reference lines 30-125 from original lazy.rs
 // Implement Display for ColumnFullStatistics
-impl fmt::Display for ColumnFullStatistics {
+impl fmt::Display for StatsDescription {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut table = Table::new();
 
@@ -17,6 +17,8 @@ impl fmt::Display for ColumnFullStatistics {
 
         table.set_header(vec![
             Cell::new("Column"),
+            Cell::new("Counts"),
+            Cell::new("Null Counts"),
             Cell::new("Mean"),
             Cell::new("Variance"),
             Cell::new("Median"),
@@ -30,6 +32,8 @@ impl fmt::Display for ColumnFullStatistics {
         for (column, stats) in entries {
             table.add_row(vec![
                 Cell::new(column),
+                Cell::new(format!("{:.6}", stats.count)),
+                Cell::new(format!("{:.6}", stats.null_count)),
                 Cell::new(format!("{:.6}", stats.mean)),
                 Cell::new(format!("{:.6}", stats.variance)),
                 Cell::new(format!("{:.6}", stats.median)),

@@ -4,7 +4,7 @@ use arrow::record_batch::RecordBatch;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-/// Newtype wrappers for statistics results
+/// New type wrappers for statistics results
 #[derive(Debug)]
 pub struct ColumnMeans(pub HashMap<String, f64>);
 
@@ -16,6 +16,8 @@ pub struct CovarianceMatrix(pub HashMap<(String, String), f64>);
 
 #[derive(Debug)]
 pub struct ColumnFullStats {
+    pub count: usize,
+    pub null_count: usize,
     pub mean: f64,
     pub variance: f64,
     pub median: f64,
@@ -24,7 +26,7 @@ pub struct ColumnFullStats {
 }
 
 #[derive(Debug)]
-pub struct ColumnFullStatistics(pub HashMap<String, ColumnFullStats>);
+pub struct StatsDescription(pub HashMap<String, ColumnFullStats>);
 
 type FilterFn = dyn Fn(&RecordBatch) -> ArrowResult<BooleanArray> + Send + Sync;
 

@@ -9,6 +9,47 @@ use std::arch::aarch64::*;
 use std::collections::HashMap;
 
 impl LazyStatistics for LazyDataset {
+    // Implementation of counts() method
+    fn counts(&self) -> ArrowResult<HashMap<String, usize>> {
+        let schema = self.source.get_schema();
+        let mut counts = HashMap::new();
+
+        for field in schema.fields() {
+            let column_name = field.name();
+            let mut count = 0;
+
+            // Sum up rows across all batches
+            for batch in self.source.get_batches() {
+                count += batch.column(batch.schema().index_of(column_name)?).len();
+            }
+
+            counts.insert(column_name.clone(), count);
+        }
+
+        Ok(counts)
+    }
+
+    fn null_counts(&self) -> ArrowResult<HashMap<String, usize>> {
+        let schema = self.source.get_schema();
+        let mut null_counts = HashMap::new();
+
+        for field in schema.fields() {
+            let column_name = field.name();
+            let mut null_count = 0;
+
+            // Sum up rows across all batches
+            for batch in self.source.get_batches() {
+                null_count += batch
+                    .column(batch.schema().index_of(column_name)?)
+                    .null_count();
+            }
+
+            null_counts.insert(column_name.clone(), null_count);
+        }
+
+        Ok(null_counts)
+    }
+
     fn mean_variance_single_pass(&self, column: &str, ddof: u8) -> ArrowResult<(f64, f64)> {
         let batches = self.source.get_batches();
         let mut m = 0.0f64; // Running mean
@@ -293,13 +334,18 @@ impl LazyStatistics for LazyDataset {
     }
 
     /// Calculate comprehensive statistics for all numeric columns
-    fn column_full_statistics(&self, ddof: u8) -> ArrowResult<ColumnFullStatistics> {
+    fn describe(&self, ddof: u8) -> ArrowResult<StatsDescription> {
         let schema = self.source.get_schema();
         let mut results = HashMap::new();
 
+        let counts = self.counts()?;
+        let null_counts = self.null_counts()?;
         for field in schema.fields() {
             let column_name = field.name();
 
+            // Get count for this column
+            let count = counts.get(column_name).copied().unwrap_or(0);
+            let null_count = null_counts.get(column_name).copied().unwrap_or(0);
             // Check if the column type is numeric
             match field.data_type() {
                 DataType::Int8
@@ -321,6 +367,8 @@ impl LazyStatistics for LazyDataset {
                                     results.insert(
                                         column_name.clone(),
                                         ColumnFullStats {
+                                            count,
+                                            null_count,
                                             mean,
                                             variance,
                                             median,
@@ -355,7 +403,7 @@ impl LazyStatistics for LazyDataset {
             }
         }
 
-        Ok(ColumnFullStatistics(results))
+        Ok(StatsDescription(results))
     }
 
     fn covariance_pair(&self, col1: &str, col2: &str, ddof: u8) -> ArrowResult<f64> {
