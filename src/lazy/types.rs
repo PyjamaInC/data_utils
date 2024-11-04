@@ -12,6 +12,9 @@ pub struct ColumnMeans(pub HashMap<String, f64>);
 pub struct ColumnStatistics(pub HashMap<String, (f64, f64)>);
 
 #[derive(Debug)]
+pub struct CovarianceMatrix(pub HashMap<(String, String), f64>);
+
+#[derive(Debug)]
 pub struct ColumnFullStats {
     pub mean: f64,
     pub variance: f64,

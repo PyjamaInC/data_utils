@@ -1,11 +1,11 @@
 use super::types::*;
 use crate::dataset::Dataset;
+use crate::lazy::traits::LazyOptimizer;
 use arrow::array::BooleanArray;
 use arrow::datatypes::SchemaRef;
 use arrow::error::Result as ArrowResult;
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
-
 pub struct LazyDataset {
     pub(super) source: Arc<Dataset>,
     pub(super) operations: Vec<Operation>,

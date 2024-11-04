@@ -1,4 +1,5 @@
 use super::lazy_api::LazyDataset;
+use super::traits::LazyStatistics;
 use super::types::*;
 use arrow::array::{Array, Float64Array};
 use arrow::compute::cast;
@@ -7,7 +8,7 @@ use arrow::error::Result as ArrowResult;
 use std::arch::aarch64::*;
 use std::collections::HashMap;
 
-impl LazyDataset {
+impl LazyStatistics for LazyDataset {
     fn mean_variance_single_pass(&self, column: &str, ddof: u8) -> ArrowResult<(f64, f64)> {
         let batches = self.source.get_batches();
         let mut m = 0.0f64; // Running mean
@@ -96,16 +97,16 @@ impl LazyDataset {
     }
 
     /// Calculate variance using SIMD-optimized single-pass algorithm
-    pub fn variance(&self, column: &str, ddof: u8) -> ArrowResult<f64> {
+    fn variance(&self, column: &str, ddof: u8) -> ArrowResult<f64> {
         Ok(self.mean_variance_single_pass(column, ddof)?.1)
     }
 
     /// Calculate mean using SIMD-optimized single-pass algorithm
-    pub fn mean(&self, column: &str) -> ArrowResult<f64> {
+    fn mean(&self, column: &str) -> ArrowResult<f64> {
         Ok(self.mean_variance_single_pass(column, 0)?.0)
     }
 
-    pub fn means(&self) -> ArrowResult<ColumnMeans> {
+    fn means(&self) -> ArrowResult<ColumnMeans> {
         let schema = self.source.as_ref().get_schema();
         let mut results = HashMap::new();
 
@@ -154,7 +155,7 @@ impl LazyDataset {
 
     /// Calculate variances for all numeric columns in the dataset
     /// Returns a HashMap mapping column names to their variances
-    pub fn variances(&self, ddof: u8) -> ArrowResult<HashMap<String, f64>> {
+    fn variances(&self, ddof: u8) -> ArrowResult<HashMap<String, f64>> {
         let schema = self.source.get_schema();
         let mut results = HashMap::new();
 
@@ -203,7 +204,7 @@ impl LazyDataset {
 
     /// Calculate both mean and variance for all numeric columns in a single pass
     /// Returns a HashMap mapping column names to (mean, variance) tuples
-    pub fn column_statistics(&self, ddof: u8) -> ArrowResult<ColumnStatistics> {
+    fn column_statistics(&self, ddof: u8) -> ArrowResult<ColumnStatistics> {
         let schema = self.source.get_schema();
         let mut results = HashMap::new();
 
@@ -292,7 +293,7 @@ impl LazyDataset {
     }
 
     /// Calculate comprehensive statistics for all numeric columns
-    pub fn column_full_statistics(&self, ddof: u8) -> ArrowResult<ColumnFullStatistics> {
+    fn column_full_statistics(&self, ddof: u8) -> ArrowResult<ColumnFullStatistics> {
         let schema = self.source.get_schema();
         let mut results = HashMap::new();
 
@@ -355,5 +356,156 @@ impl LazyDataset {
         }
 
         Ok(ColumnFullStatistics(results))
+    }
+
+    fn covariance_pair(&self, col1: &str, col2: &str, ddof: u8) -> ArrowResult<f64> {
+        let batches = self.source.get_batches();
+        let mut mean1 = 0.0f64;
+        let mut mean2 = 0.0f64;
+        let mut c12 = 0.0f64; // Covariance * (n-1)
+        let mut count = 0usize;
+
+        for batch in batches {
+            let idx1 = batch.schema().index_of(col1)?;
+            let idx2 = batch.schema().index_of(col2)?;
+            let array1 = cast(batch.column(idx1), &DataType::Float64)?;
+            let array2 = cast(batch.column(idx2), &DataType::Float64)?;
+
+            if let (Some(float_array1), Some(float_array2)) = (
+                array1.as_any().downcast_ref::<Float64Array>(),
+                array2.as_any().downcast_ref::<Float64Array>(),
+            ) {
+                let values1 = float_array1.values();
+                let values2 = float_array2.values();
+
+                #[cfg(target_arch = "aarch64")]
+                unsafe {
+                    let chunks1 = values1.chunks_exact(2);
+                    let chunks2 = values2.chunks_exact(2);
+                    let remainder1 = chunks1.remainder();
+                    let remainder2 = chunks2.remainder();
+
+                    for (chunk1, chunk2) in chunks1.zip(chunks2) {
+                        if !float_array1.is_null(count)
+                            && !float_array1.is_null(count + 1)
+                            && !float_array2.is_null(count)
+                            && !float_array2.is_null(count + 1)
+                        {
+                            // Load 2 f64 values into NEON vectors
+                            let v1 = vld1q_f64(chunk1.as_ptr());
+                            let v2 = vld1q_f64(chunk2.as_ptr());
+
+                            // Current means as vectors
+                            let mean1_vec = vdupq_n_f64(mean1);
+                            let mean2_vec = vdupq_n_f64(mean2);
+
+                            // Calculate differences from current means
+                            let diff1 = vsubq_f64(v1, mean1_vec);
+                            let diff2 = vsubq_f64(v2, mean2_vec);
+
+                            // Update means
+                            let count_f64 = count as f64;
+                            mean1 += vgetq_lane_f64(diff1, 0) / (count_f64 + 1.0);
+                            mean1 += vgetq_lane_f64(diff1, 1) / (count_f64 + 2.0);
+                            mean2 += vgetq_lane_f64(diff2, 0) / (count_f64 + 1.0);
+                            mean2 += vgetq_lane_f64(diff2, 1) / (count_f64 + 2.0);
+
+                            // Update covariance sum
+                            c12 += vgetq_lane_f64(diff1, 0) * vgetq_lane_f64(diff2, 0);
+                            c12 += vgetq_lane_f64(diff1, 1) * vgetq_lane_f64(diff2, 1);
+
+                            count += 2;
+                        }
+                    }
+
+                    // Handle remaining elements
+                    for (&val1, &val2) in remainder1.iter().zip(remainder2.iter()) {
+                        if !float_array1.is_null(count) && !float_array2.is_null(count) {
+                            let old_mean1 = mean1;
+                            let old_mean2 = mean2;
+                            count += 1;
+                            let diff1 = val1 - old_mean1;
+                            let diff2 = val2 - old_mean2;
+                            mean1 += diff1 / count as f64;
+                            mean2 += diff2 / count as f64;
+                            c12 += diff1 * diff2;
+                        }
+                    }
+                }
+
+                #[cfg(not(target_arch = "aarch64"))]
+                {
+                    for i in 0..values1.len() {
+                        if !float_array1.is_null(i) && !float_array2.is_null(i) {
+                            let val1 = values1[i];
+                            let val2 = values2[i];
+                            count += 1;
+                            let diff1 = val1 - mean1;
+                            let diff2 = val2 - mean2;
+                            mean1 += diff1 / count as f64;
+                            mean2 += diff2 / count as f64;
+                            c12 += diff1 * diff2;
+                        }
+                    }
+                }
+            }
+        }
+
+        if count <= ddof as usize {
+            Ok(0.0)
+        } else {
+            Ok(c12 / (count - ddof as usize) as f64)
+        }
+    }
+    /// Calculate the covariance matrix for all numeric columns
+    fn covariance_matrix(&self, ddof: u8) -> ArrowResult<CovarianceMatrix> {
+        let schema = self.source.get_schema();
+        let mut numeric_columns: Vec<String> = Vec::new();
+        let mut results = HashMap::new();
+
+        // First, collect all numeric columns
+        for field in schema.fields() {
+            match field.data_type() {
+                DataType::Int8
+                | DataType::Int16
+                | DataType::Int32
+                | DataType::Int64
+                | DataType::UInt8
+                | DataType::UInt16
+                | DataType::UInt32
+                | DataType::UInt64
+                | DataType::Float32
+                | DataType::Float64 => {
+                    numeric_columns.push(field.name().clone());
+                }
+                _ => continue,
+            }
+        }
+
+        // Calculate covariance for each pair of columns
+        for i in 0..numeric_columns.len() {
+            for j in i..numeric_columns.len() {
+                let col1 = &numeric_columns[i];
+                let col2 = &numeric_columns[j];
+
+                match self.covariance_pair(col1, col2, ddof) {
+                    Ok(cov) => {
+                        // Store both (i,j) and (j,i) as covariance matrix is symmetric
+                        results.insert((col1.clone(), col2.clone()), cov);
+                        if i != j {
+                            results.insert((col2.clone(), col1.clone()), cov);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: Could not calculate covariance for columns {} and {}: {}",
+                            col1, col2, e
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(CovarianceMatrix(results))
     }
 }

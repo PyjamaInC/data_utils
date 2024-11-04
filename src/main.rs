@@ -9,10 +9,11 @@ pub mod date_utils;
 pub mod stats;
 pub mod transformations;
 // use arrow::compute::kernels::cmp::gt;
+// use crate::lazy::traits::LazyStatistics;
 use arrow::error::Result as ArrowResult;
 use dataset::Dataset;
 use date_utils::{DateConversionOptions, DateFormat, ErrorStrategy};
-use lazy::LazyDataset;
+use lazy::prelude::*; // Import everything commonly needed
 use transformations::DateConverter;
 pub mod lazy;
 // USE EXAMPLE
@@ -53,13 +54,15 @@ fn main() -> ArrowResult<()> {
         lazy_dataset.variance("<Open>", 1)?
     );
 
-    let means = lazy_dataset.means()?;
-    println!("Column Means:");
-    println!("{}", means);
+    // let means = lazy_dataset.means()?;
+    // println!("Column Means:");
+    // println!("{}", means);
 
-    let stats = lazy_dataset.column_full_statistics(1)?;
-    println!("\nColumn Statistics (Mean and Variance):");
-    println!("{}", stats);
+    // let stats = lazy_dataset.column_full_statistics(1)?;
+    // println!("\nColumn Statistics (Mean and Variance):");
+    // println!("{}", stats);
+    let cov_matrix = lazy_dataset.covariance_matrix(1)?;
+    println!("{}", cov_matrix);
 
     // Create a lazy computation plan
     // let result = LazyDataset::new(dataset)
