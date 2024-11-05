@@ -8,6 +8,23 @@ use arrow::error::Result as ArrowResult;
 use std::arch::aarch64::*;
 use std::collections::HashMap;
 
+/// Returns true if the given DataType is a numeric type
+pub fn is_numeric(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float32
+            | DataType::Float64
+    )
+}
+
 impl LazyStatistics for LazyDataset {
     // Implementation of counts() method
     fn counts(&self) -> ArrowResult<HashMap<String, usize>> {
@@ -205,16 +222,7 @@ impl LazyStatistics for LazyDataset {
 
             // Check if the column type is numeric
             match field.data_type() {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64 => {
+                data_type if is_numeric(data_type) => {
                     // Calculate variance for numeric column
                     match self.variance(column_name, ddof) {
                         Ok(var) => {
@@ -254,16 +262,7 @@ impl LazyStatistics for LazyDataset {
 
             // Check if the column type is numeric
             match field.data_type() {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64 => {
+                data_type if is_numeric(data_type) => {
                     // Calculate both mean and variance in single pass
                     match self.mean_variance_single_pass(column_name, ddof) {
                         Ok(stats) => {
@@ -348,16 +347,7 @@ impl LazyStatistics for LazyDataset {
             let null_count = null_counts.get(column_name).copied().unwrap_or(0);
             // Check if the column type is numeric
             match field.data_type() {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64 => {
+                data_type if is_numeric(data_type) => {
                     // Calculate mean and variance in single pass
                     match self.mean_variance_single_pass(column_name, ddof) {
                         Ok((mean, variance)) => {
@@ -514,16 +504,7 @@ impl LazyStatistics for LazyDataset {
         // First, collect all numeric columns
         for field in schema.fields() {
             match field.data_type() {
-                DataType::Int8
-                | DataType::Int16
-                | DataType::Int32
-                | DataType::Int64
-                | DataType::UInt8
-                | DataType::UInt16
-                | DataType::UInt32
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64 => {
+                data_type if is_numeric(data_type) => {
                     numeric_columns.push(field.name().clone());
                 }
                 _ => continue,
